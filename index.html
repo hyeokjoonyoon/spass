@@ -2494,10 +2494,13 @@ window.SPASS_CATALOG = {"version":"menu-2","ui":{"en":{"ui.h1":"Discover Local F
     const manual = normalize(saved);
     if (manual) return manual;
     const supported = new Set(LANGUAGE_GROUPS.flatMap(([, rows]) => rows.map(([code]) => code)));
-    const preferred = normalize(languages?.[0]) || normalize(language);
-    if (supported.has(preferred)) return preferred;
-    const base = preferred?.split('-')[0];
-    return supported.has(base) ? base : 'ko';
+    for (const value of [language, ...(Array.isArray(languages) ? languages : [])]) {
+      const preferred = normalize(value);
+      if (supported.has(preferred)) return preferred;
+      const base = preferred?.split('-')[0];
+      if (supported.has(base)) return base;
+    }
+    return 'ko';
   }
   function direction(lang) {
     try {
@@ -2912,17 +2915,22 @@ render();loadPhotos();
 </script><script>
 (() => {
   'use strict';
+  if (window.SpassI18n) return;
   const C = window.SpassI18nCore;
   const catalog = window.SPASS_CATALOG;
   const config = window.SPASS_CONFIG;
   const storage = {
     memory: new Map(),
     get(key) { try { return localStorage.getItem(key) ?? this.memory.get(key); } catch { return this.memory.get(key); } },
+    remove(key) { this.memory.delete(key); try { localStorage.removeItem(key); } catch {} },
     set(key, value) { this.memory.set(key, value); try { localStorage.setItem(key, value); } catch {} }
   };
-  const legacy = storage.get('spass-l');
-  const saved = C.normalize(storage.get('spass-language')) ||
-    (/^[0-3]$/.test(legacy) ? ['en', 'ko', 'ja', 'zh-Hans'][Number(legacy)] : null);
+  function savedLanguage() {
+    const legacy = storage.get('spass-l');
+    return C.normalize(storage.get('spass-language')) ||
+      (/^[0-3]$/.test(legacy) ? ['en', 'ko', 'ja', 'zh-Hans'][Number(legacy)] : null);
+  }
+  const saved = savedLanguage();
   let language = C.decide(saved, navigator.languages, navigator.language);
   const root = document.documentElement;
   root.lang = language;
@@ -3001,7 +3009,7 @@ render();loadPhotos();
     phrases = new Map();
     for (const entry of entries) if (!phrases.has(entry.fallback)) phrases.set(entry.fallback, entry);
     const escaped = [...phrases.keys()].filter(Boolean).map(text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-    phrasePattern = new RegExp('(?<![\\p{L}\\p{N}])(?:' + escaped.join('|') + ')(?![\\p{L}\\p{N}])', 'gu');
+    phrasePattern = new RegExp('(^|[^\\p{L}\\p{N}])(' + escaped.join('|') + ')(?![\\p{L}\\p{N}])', 'gu');
   }
   function value(entry) {
     if (entry.ui) return catalog.ui[language]?.[entry.id] || translated.get(entry.id) || entry.fallback;
@@ -3012,7 +3020,7 @@ render();loadPhotos();
   function replaceText(source) {
     const exact = entries.find(entry => entry.fallback === source.trim());
     if (exact) return source.replace(source.trim(), () => value(exact));
-    return source.replace(phrasePattern, phrase => value(phrases.get(phrase)));
+    return source.replace(phrasePattern, (match, prefix, phrase) => prefix + value(phrases.get(phrase)));
   }
 
   function paint() {
@@ -3049,7 +3057,7 @@ render();loadPhotos();
     if (chip) chip.textContent = C.nativeName(language);
     renderMerchantReceipt();
     updateNotices();
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['placeholder', 'title', 'alt'] });
   }
   function renderMerchantReceipt() {
     if (!document.querySelector('.done-page')) return;
@@ -3174,7 +3182,17 @@ render();loadPhotos();
   const other = document.createElement('button');
   other.type = 'button'; other.className = 'language-other'; other.textContent = '다른 언어 검색…';
   other.addEventListener('click', () => { closeDropdown(false); search.value = ''; listLanguages(); picker.showModal(); search.focus(); });
-  dropdown.append(listbox, other); document.body.append(dropdown);
+  const automatic = document.createElement('button');
+  automatic.type = 'button';
+  automatic.className = 'language-other';
+  automatic.textContent = '기기 언어 자동 / Device language';
+  automatic.addEventListener('click', () => {
+    storage.remove('spass-language');
+    storage.remove('spass-l');
+    closeDropdown(false);
+    applyLanguage(C.decide(null, navigator.languages, navigator.language));
+  });
+  dropdown.append(listbox, other, automatic); document.body.append(dropdown);
   let activeIndex = 0;
   function syncOptions() {
     for (const option of options) {
@@ -3261,8 +3279,11 @@ render();loadPhotos();
   function choose(code) {
     const next = C.normalize(code);
     if (!next) return;
-    language = next;
     storage.set('spass-language', next);
+    applyLanguage(next);
+  }
+  function applyLanguage(next) {
+    language = next;
     generation++;
     translated = new Map();
     usedAI = false;
@@ -3308,8 +3329,15 @@ render();loadPhotos();
     const promise = (async () => {
       const url = new URL(config.dictionaryPath + encodeURIComponent(target) + '.json', document.baseURI);
       url.searchParams.set('v', config.menuVersion);
-      url.searchParams.set('rev', '34-2');
-      const response = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(C.LIMITS.timeout) });
+      url.searchParams.set('rev', '34-3');
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), C.LIMITS.timeout);
+      let response;
+      try {
+        response = await fetch(url, { credentials: 'omit', signal: controller.signal });
+      } finally {
+        clearTimeout(timer);
+      }
       if (!response.ok) throw Error('Dictionary unavailable');
       const data = await response.json();
       C.validateDictionary(data, target, config.menuVersion, entries.map(({id,text}) => ({id,text})), {...catalog.ui[target], ...catalog.menu?.[target]});
@@ -3388,6 +3416,18 @@ render();loadPhotos();
   });
   document.addEventListener('submit', event => {
     if (event.target.id === 'owner-form') setTimeout(() => { translated.clear(); completed.clear(); refresh(); }, 0);
+  });
+  function synchronizeLanguage() {
+    const next = C.decide(savedLanguage(), navigator.languages, navigator.language);
+    if (next !== language) applyLanguage(next);
+  }
+  window.addEventListener('languagechange', synchronizeLanguage);
+  window.addEventListener('pageshow', synchronizeLanguage);
+  window.addEventListener('storage', event => {
+    if (!event.key || ['spass-language', 'spass-l'].includes(event.key)) {
+      storage.memory.clear();
+      synchronizeLanguage();
+    }
   });
   window.SpassI18n = { choose, refresh, language: () => language };
   refresh();
