@@ -2925,13 +2925,11 @@ render();loadPhotos();
     remove(key) { this.memory.delete(key); try { localStorage.removeItem(key); } catch {} },
     set(key, value) { this.memory.set(key, value); try { localStorage.setItem(key, value); } catch {} }
   };
-  function savedLanguage() {
-    const legacy = storage.get('spass-l');
-    return C.normalize(storage.get('spass-language')) ||
-      (/^[0-3]$/.test(legacy) ? ['en', 'ko', 'ja', 'zh-Hans'][Number(legacy)] : null);
-  }
-  const saved = savedLanguage();
-  let language = C.decide(saved, navigator.languages, navigator.language);
+  // Each new document starts with the browser language. Manual changes last for this visit.
+  storage.remove('spass-language');
+  storage.remove('spass-l');
+  let manualLanguage = null;
+  let language = C.decide(null, navigator.languages, navigator.language);
   const root = document.documentElement;
   root.lang = language;
   root.dir = C.direction(language);
@@ -3182,17 +3180,7 @@ render();loadPhotos();
   const other = document.createElement('button');
   other.type = 'button'; other.className = 'language-other'; other.textContent = '다른 언어 검색…';
   other.addEventListener('click', () => { closeDropdown(false); search.value = ''; listLanguages(); picker.showModal(); search.focus(); });
-  const automatic = document.createElement('button');
-  automatic.type = 'button';
-  automatic.className = 'language-other';
-  automatic.textContent = '기기 언어 자동 / Device language';
-  automatic.addEventListener('click', () => {
-    storage.remove('spass-language');
-    storage.remove('spass-l');
-    closeDropdown(false);
-    applyLanguage(C.decide(null, navigator.languages, navigator.language));
-  });
-  dropdown.append(listbox, other, automatic); document.body.append(dropdown);
+  dropdown.append(listbox, other); document.body.append(dropdown);
   let activeIndex = 0;
   function syncOptions() {
     for (const option of options) {
@@ -3279,7 +3267,7 @@ render();loadPhotos();
   function choose(code) {
     const next = C.normalize(code);
     if (!next) return;
-    storage.set('spass-language', next);
+    manualLanguage = next;
     applyLanguage(next);
   }
   function applyLanguage(next) {
@@ -3418,17 +3406,11 @@ render();loadPhotos();
     if (event.target.id === 'owner-form') setTimeout(() => { translated.clear(); completed.clear(); refresh(); }, 0);
   });
   function synchronizeLanguage() {
-    const next = C.decide(savedLanguage(), navigator.languages, navigator.language);
+    const next = C.decide(manualLanguage, navigator.languages, navigator.language);
     if (next !== language) applyLanguage(next);
   }
   window.addEventListener('languagechange', synchronizeLanguage);
   window.addEventListener('pageshow', synchronizeLanguage);
-  window.addEventListener('storage', event => {
-    if (!event.key || ['spass-language', 'spass-l'].includes(event.key)) {
-      storage.memory.clear();
-      synchronizeLanguage();
-    }
-  });
   window.SpassI18n = { choose, refresh, language: () => language };
   refresh();
 })();
