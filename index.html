@@ -3292,6 +3292,7 @@ render();loadPhotos();
     const promise = (async () => {
       const url = new URL(config.dictionaryPath + encodeURIComponent(target) + '.json', document.baseURI);
       url.searchParams.set('v', config.menuVersion);
+      url.searchParams.set('rev', '34-1');
       const response = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(C.LIMITS.timeout) });
       if (!response.ok) throw Error('Dictionary unavailable');
       const data = await response.json();
