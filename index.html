@@ -162,6 +162,8 @@ button:disabled{opacity:.45}button,a,input,summary{touch-action:manipulation}
 .language-other{width:100%;padding:12px;text-align:start;border:0;border-top:1px solid var(--ln);background:var(--cd);color:var(--tx)}
 .language-other:focus-visible{outline:2px solid var(--g);outline-offset:-2px}
 
+.spass-language-starting :is(#hd, #app, #bar, .translation-notice, .allergy-notice) { visibility: hidden; }
+
 </style>
 </head><body><header id="hd" class="hd"></header><main id="app" class="w"></main><div id="bar"></div><div id="tt" role="status" aria-live="polite"></div>
 <script>
@@ -2489,7 +2491,13 @@ window.SPASS_CATALOG = {"version":"menu-2","ui":{"en":{"ui.h1":"Discover Local F
     } catch { return null; }
   }
   function decide(saved, languages, language) {
-    return normalize(saved) || normalize(languages?.[0]) || normalize(language) || 'en';
+    const manual = normalize(saved);
+    if (manual) return manual;
+    const supported = new Set(LANGUAGE_GROUPS.flatMap(([, rows]) => rows.map(([code]) => code)));
+    const preferred = normalize(languages?.[0]) || normalize(language);
+    if (supported.has(preferred)) return preferred;
+    const base = preferred?.split('-')[0];
+    return supported.has(base) ? base : 'ko';
   }
   function direction(lang) {
     try {
@@ -2711,7 +2719,7 @@ const V={
 };
 const hd=()=>brandHeader();
 function upd(){const c=cnt(),e=$('#cc');e.textContent=c;e.hidden=!c;$('#bar').innerHTML=c&&['stores','store','menu'].includes(rt)?`<a class="bar" href="#cart"><span>${t('viewCart')} (${c})</span><b>${W(tot())}</b></a>`:''}
-function render(){Carousel.destroy();closePhoto();closeOtherDialogs();let h=location.hash.slice(1);rt=h.startsWith('store-')?'store':h.startsWith('menu-')?'menu':['stores','cart','done','how'].includes(h)?h:'home';const id=h.slice(h.indexOf('-')+1);if(rt==='store'&&!S.some(s=>s.id===id)||rt==='menu'&&!IT[id])rt='stores';if(rt==='done'&&!order)rt='home';document.documentElement.lang=LG[L];$('#hd').innerHTML=hd();updateThemeButton();$('#app').innerHTML=(['store','menu'].includes(rt)?V[rt](id):V[rt]())+brandFooter();upd();if(rt==='home')Carousel.mount()}
+function render(){Carousel.destroy();closePhoto();closeOtherDialogs();let h=location.hash.slice(1);rt=h.startsWith('store-')?'store':h.startsWith('menu-')?'menu':['stores','cart','done','how'].includes(h)?h:'home';const id=h.slice(h.indexOf('-')+1);if(rt==='store'&&!S.some(s=>s.id===id)||rt==='menu'&&!IT[id])rt='stores';if(rt==='done'&&!order)rt='home';document.documentElement.lang=window.SpassI18n?.language()||LG[L];$('#hd').innerHTML=hd();updateThemeButton();$('#app').innerHTML=(['store','menu'].includes(rt)?V[rt](id):V[rt]())+brandFooter();upd();if(rt==='home')Carousel.mount()}
 function say(k){const e=$('#tt');e.textContent=t(k);e.classList.add('on');clearTimeout(tm);tm=setTimeout(()=>e.classList.remove('on'),4000)}
 const modal=document.createElement('dialog');modal.id='photo-modal';document.body.append(modal);let photoFocus=null;
 function closePhoto(){if(modal.open){modal.close();modal.innerHTML='';document.body.style.overflow='';if(photoFocus?.isConnected)photoFocus.focus();Carousel?.schedule()}}
@@ -2912,11 +2920,18 @@ render();loadPhotos();
     get(key) { try { return localStorage.getItem(key) ?? this.memory.get(key); } catch { return this.memory.get(key); } },
     set(key, value) { this.memory.set(key, value); try { localStorage.setItem(key, value); } catch {} }
   };
-  let saved = storage.get('spass-language');
-  if (!saved) saved = ['en', 'ko', 'ja', 'zh-Hans'][Number(storage.get('spass-l'))];
-  // An absent old preference is not a manual English selection.
-  if (!storage.get('spass-language') && storage.get('spass-l') == null) saved = null;
+  const legacy = storage.get('spass-l');
+  const saved = C.normalize(storage.get('spass-language')) ||
+    (/^[0-3]$/.test(legacy) ? ['en', 'ko', 'ja', 'zh-Hans'][Number(legacy)] : null);
   let language = C.decide(saved, navigator.languages, navigator.language);
+  const root = document.documentElement;
+  root.lang = language;
+  root.dir = C.direction(language);
+  // Give bundled dictionaries a short head start without blocking slow or offline visits.
+  if (!catalog.ui[language] && C.LANGUAGE_GROUPS.some(([, rows]) => rows.some(([code]) => code === language))) {
+    root.classList.add('spass-language-starting');
+    setTimeout(() => root.classList.remove('spass-language-starting'), 450);
+  }
   let generation = 0;
   let running = false;
   let failed = false;
@@ -3002,6 +3017,7 @@ render();loadPhotos();
 
   function paint() {
     observer.disconnect();
+    if (!running) root.classList.remove('spass-language-starting');
     document.documentElement.lang = language;
     document.documentElement.dir = C.direction(language);
     ensurePicker();
@@ -3016,10 +3032,10 @@ render();loadPhotos();
       if (node.textContent !== output) node.textContent = output;
       sources.set(node, { source, output });
     }
-    for (const element of document.querySelectorAll('[aria-label],[placeholder],[alt]')) {
+    for (const element of document.querySelectorAll('[aria-label],[placeholder],[alt],[title]')) {
       if (element.closest('[data-no-translate],#editor-dialog,#language-dialog,.original-name')) continue;
       const records = attributeSources.get(element) || {};
-      for (const attr of ['aria-label', 'placeholder', 'alt']) {
+      for (const attr of ['aria-label', 'placeholder', 'alt', 'title']) {
         if (!element.hasAttribute(attr)) continue;
         const current = element.getAttribute(attr);
         const source = records[attr]?.output === current ? records[attr].source : current;
@@ -3292,7 +3308,7 @@ render();loadPhotos();
     const promise = (async () => {
       const url = new URL(config.dictionaryPath + encodeURIComponent(target) + '.json', document.baseURI);
       url.searchParams.set('v', config.menuVersion);
-      url.searchParams.set('rev', '34-1');
+      url.searchParams.set('rev', '34-2');
       const response = await fetch(url, { credentials: 'omit', signal: AbortSignal.timeout(C.LIMITS.timeout) });
       if (!response.ok) throw Error('Dictionary unavailable');
       const data = await response.json();
